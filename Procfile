@@ -1,1 +1,1 @@
-web: gunicorn sales_analytics:app
+web: gunicorn --chdir backend sales_analytics:app --bind 0.0.0.0:$PORT
