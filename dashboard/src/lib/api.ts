@@ -148,7 +148,7 @@ export async function checkBackendHealth(): Promise<HealthResponse> {
   }
 }
 
-export async function fetchAnalytics(filters: FilterParams = {}): Promise<AnalyticsResponse> {
+export async function fetchAnalytics(filters: FilterParams = {}, retries = 2): Promise<AnalyticsResponse> {
   const params = new URLSearchParams();
   if (filters.startDate) params.append('start_date', filters.startDate);
   if (filters.endDate) params.append('end_date', filters.endDate);
@@ -159,33 +159,46 @@ export async function fetchAnalytics(filters: FilterParams = {}): Promise<Analyt
   const queryString = params.toString();
   const url = `${API_BASE_URL}/api/analytics${queryString ? `?${queryString}` : ''}`;
 
-  try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-      },
-      cache: 'no-store',
-    });
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        cache: 'no-store',
+      });
 
-    const data = await res.json();
+      const data = await res.json();
 
-    if (!res.ok || data.success === false) {
-      throw new Error(data.error?.message || `Analytics API returned HTTP ${res.status}`);
-    }
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error?.message || `Analytics API returned HTTP ${res.status}`);
+      }
 
-    return data;
-  } catch (err: unknown) {
-    if (err instanceof TypeError && err.message.includes('fetch')) {
-      throw new Error(
-        `Unable to reach backend API at ${API_BASE_URL}. Ensure the Flask server is running on port 5000 and CORS is enabled.`
-      );
+      return data;
+    } catch (err: unknown) {
+      const isNetworkError =
+        (err instanceof TypeError && err.message.includes('fetch')) ||
+        (err instanceof Error && (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')));
+
+      if (isNetworkError && attempt < retries) {
+        // Wait 2 seconds before retrying (gives Render time to wake up)
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        continue;
+      }
+
+      if (isNetworkError) {
+        throw new Error(
+          `Unable to reach backend API at ${API_BASE_URL}. If the backend was sleeping (Render Free Tier cold start), it is now waking up. Please click 'Retry Connection'.`
+        );
+      }
+      if (err instanceof Error) {
+        throw err;
+      }
+      throw new Error('An unknown error occurred while fetching analytics');
     }
-    if (err instanceof Error) {
-      throw err;
-    }
-    throw new Error('An unknown error occurred while fetching analytics');
   }
+  throw new Error(`Unable to reach backend API at ${API_BASE_URL}`);
 }
 
 export async function uploadDataset(file: File): Promise<{ success: boolean; message: string; data: AnalyticsResponse }> {
